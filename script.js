@@ -1,245 +1,375 @@
-/* =====================
-   UnitConverterPro - Script
-   All 10 tools fully working
-===================== */
+// UnitConverterPro — robust conversion script
+(function () {
+  'use strict';
 
-/* ---------- 1. Length Converter ---------- */
-function convertLength() {
-  const input = parseFloat(document.getElementById("lengthInput").value);
-  const from = document.getElementById("lengthFrom").value;
-  const to = document.getElementById("lengthTo").value;
-  if (isNaN(input)) return;
+  const DEBUG = location.search.includes('debug=1');
 
-  let meters;
-  switch (from) {
-    case "cm": meters = input / 100; break;
-    case "inch": meters = input * 0.0254; break;
-    case "m": meters = input; break;
-    case "km": meters = input * 1000; break;
-    default: meters = input;
+  function log(...args){ if(DEBUG) console.log('[UCP]', ...args); }
+  function warn(...args){ console.warn('[UCP]', ...args); }
+  function err(...args){ console.error('[UCP]', ...args); }
+
+  // ---------------------------
+  // Registry (units & factors)
+  // ---------------------------
+  const REG = {
+    length: { m:1, cm:0.01, mm:0.001, km:1000, in:0.0254, ft:0.3048, yd:0.9144, mi:1609.344 },
+    weight: { kg:1, g:0.001, mg:0.000001, lb:0.45359237, oz:0.028349523125 },
+    volume: { L:1, mL:0.001, cup:0.2365882365, tbsp:0.01478676478125, floz:0.0295735295625, gal:3.785411784 },
+    speed: { mps:1, kmh:1000/3600, mph:1609.344/3600, knot:1852/3600 },
+    data: { B:1, KB:1e3, MB:1e6, GB:1e9, KiB:1024, MiB:1024**2, GiB:1024**3 },
+    time: { s:1, min:60, hr:3600, d:86400 },
+    cooking: { tsp:0.00492892159375, tbsp:0.01478676478125, cup:0.2365882365, mL:0.001, L:1 },
+    temp: { C:'C', F:'F', K:'K' }
+  };
+
+  // ---------------------------
+  // Utilities
+  // ---------------------------
+  function safeNumber(v){
+    if (v === '' || v === null || v === undefined) return NaN;
+    // allow commas
+    const n = Number(String(v).replace(/,/g, '').trim());
+    return Number.isFinite(n) ? n : NaN;
+  }
+  function formatNum(n){
+    if (!isFinite(n)) return '';
+    return (Math.round((n + Number.EPSILON) * 1000000) / 1000000).toString();
   }
 
-  let result;
-  switch (to) {
-    case "cm": result = meters * 100; break;
-    case "inch": result = meters / 0.0254; break;
-    case "m": result = meters; break;
-    case "km": result = meters / 1000; break;
-    default: result = meters;
+  // ---------------------------
+  // Temperature conversions
+  // ---------------------------
+  function convertTemp(val, from, to){
+    if (from === to) return val;
+    let C;
+    if (from === 'C') C = val;
+    else if (from === 'F') C = (val - 32) * 5/9;
+    else if (from === 'K') C = val - 273.15;
+    else return NaN;
+    if (to === 'C') return C;
+    if (to === 'F') return (C * 9/5) + 32;
+    if (to === 'K') return C + 273.15;
+    return NaN;
   }
 
-  document.getElementById("lengthResult").innerText = result.toFixed(2) + " " + to;
-}
-
-/* ---------- 2. Weight Converter ---------- */
-function convertWeight() {
-  const input = parseFloat(document.getElementById("weightInput").value);
-  const from = document.getElementById("weightFrom").value;
-  const to = document.getElementById("weightTo").value;
-  if (isNaN(input)) return;
-
-  let kg;
-  switch (from) {
-    case "g": kg = input / 1000; break;
-    case "kg": kg = input; break;
-    case "lb": kg = input * 0.453592; break;
-    default: kg = input;
+  // ---------------------------
+  // Linear convert via registry
+  // ---------------------------
+  function convertLinear(cat, val, from, to){
+    if (!REG[cat]) return NaN;
+    if (from === to) return val;
+    const reg = REG[cat];
+    if (!reg[from] || !reg[to]) return NaN;
+    const toBase = val * reg[from]; // to base unit
+    return toBase / reg[to];
   }
 
-  let result;
-  switch (to) {
-    case "g": result = kg * 1000; break;
-    case "kg": result = kg; break;
-    case "lb": result = kg / 0.453592; break;
-    default: result = kg;
+  // ---------------------------
+  // Currency (safe fetch + cache)
+  // ---------------------------
+  const FX_ENDPOINT = 'https://api.exchangerate.host/latest';
+  const FX_CACHE_KEY = 'ucp_fx_cache_v1';
+
+  async function fetchRates(base = 'USD'){
+    // try local cache
+    try {
+      const raw = localStorage.getItem(FX_CACHE_KEY);
+      if (raw){
+        const parsed = JSON.parse(raw);
+        // use cached if < 12 hours
+        if (parsed && parsed.ts && (Date.now() - parsed.ts) < (12 * 3600 * 1000)){
+          log('Using cached FX rates');
+          return parsed.data;
+        }
+      }
+    } catch(e){ log('FX cache read error', e); }
+
+    try {
+      const res = await fetch(`${FX_ENDPOINT}?base=${encodeURIComponent(base)}`);
+      if (!res.ok) throw new Error('FX fetch failed: ' + res.status);
+      const data = await res.json();
+      localStorage.setItem(FX_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
+      return data;
+    } catch (e) {
+      warn('FX fetch error:', e);
+      // fallback: return cached if any
+      try {
+        const raw = localStorage.getItem(FX_CACHE_KEY);
+        if (raw) return JSON.parse(raw).data;
+      } catch(e){}
+      return null;
+    }
   }
 
-  document.getElementById("weightResult").innerText = result.toFixed(2) + " " + to;
-}
-
-/* ---------- 3. Temperature Converter ---------- */
-function convertTemp() {
-  const input = parseFloat(document.getElementById("tempInput").value);
-  const from = document.getElementById("tempFrom").value;
-  const to = document.getElementById("tempTo").value;
-  if (isNaN(input)) return;
-
-  let celsius;
-  switch (from) {
-    case "C": celsius = input; break;
-    case "F": celsius = (input - 32) * (5/9); break;
-    case "K": celsius = input - 273.15; break;
-    default: celsius = input;
+  async function convertCurrency(val, from, to){
+    if (from === to) return val;
+    const fx = await fetchRates(from === 'USD' ? 'USD' : 'USD'); // exchangerate.host supports base param
+    if (!fx || !fx.rates) return NaN;
+    // convert via base (fx.base)
+    const base = fx.base || 'USD';
+    let inBase;
+    if (from === base) inBase = val;
+    else inBase = val / (fx.rates[from] || 1);
+    if (to === base) return inBase;
+    return inBase * (fx.rates[to] || 1);
   }
 
-  let result;
-  switch (to) {
-    case "C": result = celsius; break;
-    case "F": result = (celsius * 9/5) + 32; break;
-    case "K": result = celsius + 273.15; break;
-    default: result = celsius;
+  // ---------------------------
+  // Convert value wrapper
+  // ---------------------------
+  async function convertValue(cat, val, from, to){
+    if (val === '' || isNaN(val)) return NaN;
+    val = Number(val);
+    if (cat === 'temp') return convertTemp(val, from, to);
+    if (cat === 'currency') return await convertCurrency(val, from, to);
+    return convertLinear(cat, val, from, to);
   }
 
-  document.getElementById("tempResult").innerText = result.toFixed(2) + " " + to;
-}
-
-/* ---------- 4. Volume Converter ---------- */
-function convertVolume() {
-  const input = parseFloat(document.getElementById("volumeInput").value);
-  const from = document.getElementById("volumeFrom").value;
-  const to = document.getElementById("volumeTo").value;
-  if (isNaN(input)) return;
-
-  let liters;
-  switch (from) {
-    case "ml": liters = input / 1000; break;
-    case "l": liters = input; break;
-    case "gallon": liters = input * 3.78541; break;
-    default: liters = input;
+  // ---------------------------
+  // Form wiring (generic .converter-form)
+  // ---------------------------
+  function populateUnits(selectEl, units){
+    if (!selectEl) return;
+    // if already has options keep them
+    if (selectEl.options && selectEl.options.length > 0) return;
+    units.forEach(u=>{
+      const opt = document.createElement('option');
+      opt.value = u;
+      opt.textContent = u;
+      selectEl.appendChild(opt);
+    });
   }
 
-  let result;
-  switch (to) {
-    case "ml": result = liters * 1000; break;
-    case "l": result = liters; break;
-    case "gallon": result = liters / 3.78541; break;
-    default: result = liters;
+  async function wireGenericConverters(){
+    const forms = document.querySelectorAll('.converter-form');
+    if (!forms || forms.length === 0) { log('No .converter-form found'); return; }
+
+    forms.forEach(form=>{
+      try {
+        const cat = form.dataset.cat || form.getAttribute('data-cat') || 'length';
+        const from = form.querySelector('.from-unit');
+        const to = form.querySelector('.to-unit');
+        const val = form.querySelector('.value');
+        let out = form.querySelector('.result');
+        if (!out){
+          out = document.createElement('div');
+          out.className = 'result';
+          out.style.marginTop = '8px';
+          form.appendChild(out);
+        }
+
+        // choose units list
+        let units = [];
+        if (cat === 'temp') units = ['C','F','K'];
+        else if (cat === 'currency') units = ['USD','EUR','INR','GBP','JPY','AUD','CAD'];
+        else if (REG[cat]) units = Object.keys(REG[cat]);
+        else units = ['1','2'];
+
+        if (from) populateUnits(from, units);
+        if (to) populateUnits(to, units);
+
+        const run = async ()=>{
+          try {
+            const v = safeNumber(val ? val.value : '');
+            if (isNaN(v)) { out.textContent = ''; return; }
+            const result = await convertValue(cat, v, (from ? from.value : ''), (to ? to.value : ''));
+            out.textContent = (isNaN(result) ? '—' : formatNum(result)) + (to ? ' ' + to.value : '');
+          } catch (e) {
+            warn('Conversion failed for form', e);
+            out.textContent = 'Error';
+          }
+        };
+
+        // wire events
+        if (form.querySelector('button[type="submit"]') || form.querySelector('button')) {
+          const btn = form.querySelector('button[type="submit"]') || form.querySelector('button');
+          btn.addEventListener('click', e=>{ e.preventDefault(); run(); });
+        }
+        if (val) val.addEventListener('input', debounce(run, 250));
+        if (from) from.addEventListener('change', run);
+        if (to) to.addEventListener('change', run);
+      } catch (e){ warn('Error wiring form', e); }
+    });
   }
 
-  document.getElementById("volumeResult").innerText = result.toFixed(2) + " " + to;
-}
+  // ---------------------------
+  // Legacy ID-based wiring (for pages using explicit IDs)
+  // Attempt to wire common pages like lengthInput, weightInput, tempInput...
+  // ---------------------------
+  function wireLegacyIDs(){
+    // map: prefix => {cat, inputId, fromId, toId, outId, fnName}
+    const configs = [
+      {cat:'length', input:'lengthInput', from:'lengthFrom', to:'lengthTo', out:'lengthResult', fn: 'convertLength'},
+      {cat:'weight', input:'weightInput', from:'weightFrom', to:'weightTo', out:'weightResult', fn:'convertWeight'},
+      {cat:'temp', input:'tempInput', from:'tempFrom', to:'tempTo', out:'tempResult', fn:'convertTempPage'},
+      {cat:'volume', input:'volumeInput', from:'volumeFrom', to:'volumeTo', out:'volumeResult', fn:'convertVolume'},
+      {cat:'speed', input:'speedInput', from:'speedFrom', to:'speedTo', out:'speedResult', fn:'convertSpeed'},
+      {cat:'data', input:'dataInput', from:'dataFrom', to:'dataTo', out:'dataResult', fn:'convertData'},
+      {cat:'time', input:'timeInput', from:'timeFrom', to:'timeTo', out:'timeResult', fn:'convertTime'},
+      {cat:'cooking', input:'cookInput', from:'cookFrom', to:'cookTo', out:'cookResult', fn:'convertCooking'}
+    ];
 
-/* ---------- 5. Speed Converter ---------- */
-function convertSpeed() {
-  const input = parseFloat(document.getElementById("speedInput").value);
-  const from = document.getElementById("speedFrom").value;
-  const to = document.getElementById("speedTo").value;
-  if (isNaN(input)) return;
+    configs.forEach(cfg=>{
+      try {
+        const inp = document.getElementById(cfg.input);
+        const fr = document.getElementById(cfg.from);
+        const to = document.getElementById(cfg.to);
+        const out = document.getElementById(cfg.out);
+        if (!inp && !fr && !to) return; // page not present
+        // populate missing selects
+        const units = (cfg.cat === 'temp') ? ['C','F','K'] : Object.keys(REG[cfg.cat] || {});
+        if (fr && fr.options.length === 0) populateUnits(fr, units);
+        if (to && to.options.length === 0) populateUnits(to, units);
 
-  let ms;
-  switch (from) {
-    case "kmh": ms = input / 3.6; break;
-    case "mph": ms = input * 0.44704; break;
-    case "ms": ms = input; break;
-    default: ms = input;
+        const run = async ()=>{
+          try {
+            const v = safeNumber(inp ? inp.value : '');
+            if (isNaN(v)) { if (out) out.textContent = ''; return; }
+            const result = await convertValue(cfg.cat, v, (fr ? fr.value : ''), (to ? to.value : ''));
+            if (out) out.textContent = (isNaN(result) ? '—' : formatNum(result)) + (to ? ' ' + to.value : '');
+          } catch(e){ warn('Legacy convert error', e); if (out) out.textContent = 'Error'; }
+        };
+        // attach events
+        const btn = document.querySelector(`#${cfg.input} ~ button, #${cfg.input}-btn`);
+        if (btn) btn.addEventListener('click', run);
+        if (inp) inp.addEventListener('input', debounce(run, 250));
+        if (fr) fr.addEventListener('change', run);
+        if (to) to.addEventListener('change', run);
+      } catch(e){ warn('legacy wiring failed', e); }
+    });
   }
 
-  let result;
-  switch (to) {
-    case "kmh": result = ms * 3.6; break;
-    case "mph": result = ms / 0.44704; break;
-    case "ms": result = ms; break;
-    default: result = ms;
+  // ---------------------------
+  // BMI & EMI wiring (detect either by IDs or by data-tool)
+  // ---------------------------
+  function wireBMIandEMI(){
+    // BMI
+    const bmiForm = document.querySelector('.bmi-form') || document.getElementById('bmiForm');
+    if (bmiForm){
+      const wEl = bmiForm.querySelector('#bmiWeight') || bmiForm.querySelector('.bmi-weight') || document.getElementById('bmiWeight');
+      const hEl = bmiForm.querySelector('#bmiHeight') || bmiForm.querySelector('.bmi-height') || document.getElementById('bmiHeight');
+      const out = bmiForm.querySelector('.bmi-result') || document.getElementById('bmiResult');
+      const btn = bmiForm.querySelector('button') || bmiForm.querySelector('.bmi-calc-btn');
+      if (btn){
+        btn.addEventListener('click', e=>{
+          e.preventDefault();
+          try {
+            const weight = safeNumber(wEl ? wEl.value : '');
+            const heightCm = safeNumber(hEl ? hEl.value : '');
+            if (isNaN(weight) || isNaN(heightCm) || heightCm === 0){ if(out) out.textContent = 'Enter valid numbers'; return; }
+            const height = heightCm / 100;
+            const bmi = weight / (height * height);
+            let status = '';
+            if (bmi < 18.5) status = 'Underweight';
+            else if (bmi < 24.9) status = 'Normal';
+            else if (bmi < 29.9) status = 'Overweight';
+            else status = 'Obese';
+            if (out) out.textContent = 'BMI: ' + formatNum(bmi) + ' (' + status + ')';
+          } catch(e){ warn('BMI error', e); if(out) out.textContent = 'Error'; }
+        });
+      }
+    }
+
+    // EMI
+    const emiForm = document.querySelector('.emi-form') || document.getElementById('emiForm');
+    if (emiForm){
+      const pEl = emiForm.querySelector('#emiPrincipal') || document.getElementById('emiPrincipal');
+      const rEl = emiForm.querySelector('#emiRate') || document.getElementById('emiRate');
+      const nEl = emiForm.querySelector('#emiMonths') || document.getElementById('emiMonths');
+      const out = emiForm.querySelector('.emi-result') || document.getElementById('emiResult');
+      const btn = emiForm.querySelector('button') || emiForm.querySelector('.emi-calc-btn');
+      if (btn){
+        btn.addEventListener('click', e=>{
+          e.preventDefault();
+          try {
+            const P = safeNumber(pEl ? pEl.value : '');
+            const rate = safeNumber(rEl ? rEl.value : '');
+            const n = safeNumber(nEl ? nEl.value : '');
+            if (isNaN(P) || isNaN(rate) || isNaN(n) || n <= 0){ if(out) out.textContent = 'Enter valid numbers'; return; }
+            const r = rate / 100 / 12;
+            const emi = (P * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+            if (out) out.textContent = 'EMI: ' + formatNum(emi);
+          } catch(e){ warn('EMI error', e); if(out) out.textContent = 'Error'; }
+        });
+      }
+    }
   }
 
-  document.getElementById("speedResult").innerText = result.toFixed(2) + " " + to;
-}
-
-/* ---------- 6. Data Converter ---------- */
-function convertData() {
-  const input = parseFloat(document.getElementById("dataInput").value);
-  const from = document.getElementById("dataFrom").value;
-  const to = document.getElementById("dataTo").value;
-  if (isNaN(input)) return;
-
-  let bytes;
-  switch (from) {
-    case "KB": bytes = input * 1024; break;
-    case "MB": bytes = input * 1024 * 1024; break;
-    case "GB": bytes = input * 1024 * 1024 * 1024; break;
-    case "TB": bytes = input * 1024 * 1024 * 1024 * 1024; break;
-    default: bytes = input;
+  // ---------------------------
+  // Debounce
+  // ---------------------------
+  function debounce(fn, wait){
+    let t;
+    return function(...args){ clearTimeout(t); t = setTimeout(()=> fn.apply(this, args), wait); };
   }
 
-  let result;
-  switch (to) {
-    case "KB": result = bytes / 1024; break;
-    case "MB": result = bytes / (1024 * 1024); break;
-    case "GB": result = bytes / (1024 * 1024 * 1024); break;
-    case "TB": result = bytes / (1024 * 1024 * 1024 * 1024); break;
-    default: result = bytes;
+  // ---------------------------
+  // Error overlay (visible on page)
+  // ---------------------------
+  function createErrorOverlay(){
+    if (document.getElementById('ucp-error-overlay')) return;
+    const div = document.createElement('div');
+    div.id = 'ucp-error-overlay';
+    div.style.position = 'fixed';
+    div.style.right = '18px';
+    div.style.bottom = '18px';
+    div.style.maxWidth = '320px';
+    div.style.padding = '10px 12px';
+    div.style.borderRadius = '10px';
+    div.style.background = 'rgba(220,38,38,0.95)';
+    div.style.color = '#fff';
+    div.style.fontSize = '13px';
+    div.style.zIndex = 999999;
+    div.style.display = 'none';
+    document.body.appendChild(div);
+    window.UCP_showError = function(msg){
+      div.textContent = 'UCP Error: ' + (msg && msg.message ? msg.message : String(msg || 'Unknown'));
+      div.style.display = 'block';
+      setTimeout(()=>{ div.style.display = 'none'; }, 8000);
+    };
   }
 
-  document.getElementById("dataResult").innerText = result.toFixed(2) + " " + to;
-}
+  // global uncaught errors
+  window.addEventListener('error', function(ev){
+    try {
+      createErrorOverlay();
+      window.UCP_showError(ev.error || ev.message || 'Script error');
+      err('Global error:', ev.error || ev.message);
+    } catch(e){}
+  });
+  window.addEventListener('unhandledrejection', function(ev){
+    try {
+      createErrorOverlay();
+      window.UCP_showError(ev.reason || 'Promise rejection');
+      err('Unhandled rejection:', ev.reason);
+    } catch(e){}
+  });
 
-/* ---------- 7. Time Converter ---------- */
-function convertTime() {
-  const input = parseFloat(document.getElementById("timeInput").value);
-  const from = document.getElementById("timeFrom").value;
-  const to = document.getElementById("timeTo").value;
-  if (isNaN(input)) return;
-
-  let seconds;
-  switch (from) {
-    case "sec": seconds = input; break;
-    case "min": seconds = input * 60; break;
-    case "hr": seconds = input * 3600; break;
-    default: seconds = input;
+  // ---------------------------
+  // Init
+  // ---------------------------
+  async function initAll(){
+    try {
+      createErrorOverlay();
+      log('Init converters');
+      // generic forms first
+      await wireGenericConverters();
+      wireLegacyIDs();
+      wireBMIandEMI();
+      log('Init complete');
+      window.UnitConverterProLoaded = true;
+    } catch (e) {
+      err('Init failed', e);
+      createErrorOverlay();
+      window.UCP_showError(e);
+    }
   }
 
-  let result;
-  switch (to) {
-    case "sec": result = seconds; break;
-    case "min": result = seconds / 60; break;
-    case "hr": result = seconds / 3600; break;
-    default: result = seconds;
+  // run on DOM ready
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', initAll);
+  } else {
+    initAll();
   }
 
-  document.getElementById("timeResult").innerText = result.toFixed(2) + " " + to;
-}
-
-/* ---------- 8. Cooking Converter ---------- */
-function convertCooking() {
-  const input = parseFloat(document.getElementById("cookInput").value);
-  const from = document.getElementById("cookFrom").value;
-  const to = document.getElementById("cookTo").value;
-  if (isNaN(input)) return;
-
-  let ml;
-  switch (from) {
-    case "tsp": ml = input * 4.92892; break;
-    case "tbsp": ml = input * 14.7868; break;
-    case "cup": ml = input * 240; break;
-    case "ml": ml = input; break;
-    default: ml = input;
-  }
-
-  let result;
-  switch (to) {
-    case "tsp": result = ml / 4.92892; break;
-    case "tbsp": result = ml / 14.7868; break;
-    case "cup": result = ml / 240; break;
-    case "ml": result = ml; break;
-    default: result = ml;
-  }
-
-  document.getElementById("cookResult").innerText = result.toFixed(2) + " " + to;
-}
-
-/* ---------- 9. BMI Calculator ---------- */
-function calculateBMI() {
-  const weight = parseFloat(document.getElementById("bmiWeight").value);
-  const height = parseFloat(document.getElementById("bmiHeight").value) / 100; // cm → m
-  if (isNaN(weight) || isNaN(height)) return;
-
-  const bmi = weight / (height * height);
-  let status = "";
-  if (bmi < 18.5) status = "Underweight";
-  else if (bmi < 24.9) status = "Normal weight";
-  else if (bmi < 29.9) status = "Overweight";
-  else status = "Obese";
-
-  document.getElementById("bmiResult").innerText = "BMI: " + bmi.toFixed(2) + " (" + status + ")";
-}
-
-/* ---------- 10. EMI Calculator ---------- */
-function calculateEMI() {
-  const P = parseFloat(document.getElementById("emiPrincipal").value);
-  const r = parseFloat(document.getElementById("emiRate").value) / 100 / 12; // monthly interest
-  const n = parseFloat(document.getElementById("emiMonths").value);
-  if (isNaN(P) || isNaN(r) || isNaN(n)) return;
-
-  const emi = (P * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
-  document.getElementById("emiResult").innerText = "EMI: " + emi.toFixed(2);
-}
+})();
